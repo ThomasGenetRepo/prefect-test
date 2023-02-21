@@ -1,45 +1,42 @@
+import json
+import requests
 import pandas as pd
+from datetime import datetime
 from prefect import task, flow
-import numpy as np
 
-@task(name='create_data')
-def create_data():
-    l1 = [i for i in range(0,10, 1)]
-    l2 = [i for i in range(0,20, 2)]
-    l3 = [i for i in range(0,30, 3)]
-    return pd.DataFrame({
-        'A': l1,
-        'B': l2,
-        'C': l3
-    })
-    
-@task(name='transform')
-def transform(df: pd.DataFrame) -> pd.DataFrame:
-    df.A = df.A.map(lambda x: np.sin(x))
-    df.B = df.B.map(lambda x: np.cos(x))
-    return df
-    
-@task(name = 'download')
-def save_df(df: pd.DataFrame):
-    df.to_csv('./my_data.csv', index=False)
 
-@task(name = 'read file')
-def read_data() -> pd.DataFrame:
-    return pd.read_csv('./my_data.csv')
+@task(name="Extract Task", description="Makes request.", retries=10, retry_delay_seconds=10)
+def extract(url: str) -> dict:
+    res = requests.get(url, verify=False)
+    if not res:
+        raise Exception('URL seems unavailable!')
+    print('good on extract')
+    return json.loads(res.content)
 
-@task(name = 'final battle')
-def final_battle(df: pd.DataFrame) -> pd.DataFrame:
-    df['D'] = df.A + df.B + df.C 
-    print(df)
-    return df
+@task(name="Transform Task", description="Transform Existing Data.")
+def transform(data: dict) -> pd.DataFrame:
+    transformed = []
+    for user in data:
+        transformed.append({
+            'ID': user['id'],
+            'UserId': user['userId'],
+            'Title': user['title']
+        })
+    print('good on transform')
+    return pd.DataFrame(transformed)
 
-@flow(log_prints=True)
-def my_flow():
-    data = create_data()
-    tdf = transform(data)
-    save_df(tdf)
-    df = read_data()
-    final_df = final_battle(df)
+@task(name="Load Task", description="Persists data to disk.")
+def load(data: pd.DataFrame, path: str) -> None:
+    print('loading to csv...')
+    data.to_csv(path_or_buf=path, index=False)
+    print('good on csv')
 
-if __name__ == "__main__":
-   my_flow()
+@flow(name="ETL Flow", log_prints=True)
+def etl_flow(p_url):
+    users = extract(url=p_url)
+    df_users = transform(users)
+    load(data=df_users, path=f'data/posts_{int(datetime.now().timestamp())}.csv')
+    return flow
+
+if __name__ == '__main__':
+    flow = etl_flow(p_url='https://jsonplaceholder.typicode.com/posts')
